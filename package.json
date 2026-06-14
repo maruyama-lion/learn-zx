@@ -6,7 +6,8 @@
   "main": "index.js",
   "scripts": {
     "lambda-update": "zx scripts/lambda-update.ts",
-    "load-arg": "zx scripts/load-arg.ts"
+    "load-arg": "zx scripts/load-arg.ts",
+    "db-tunnel": "zx scripts/ssm.ts"
   },
   "keywords": [],
   "author": "",
