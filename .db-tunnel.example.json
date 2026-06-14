@@ -1,0 +1,23 @@
+{
+  "dev": {
+    "profile": "dev-profile",
+    "region": "ap-northeast-1",
+    "instanceId": "i-0123456789abcdef0",
+    "secretId": "aurora/dev/credentials",
+    "localPort": 15432
+  },
+  "stg": {
+    "profile": "stg-profile",
+    "region": "ap-northeast-1",
+    "instanceId": "i-abcdef1234567890",
+    "secretId": "aurora/stg/credentials",
+    "localPort": 15433
+  },
+  "prod": {
+    "profile": "prod-profile",
+    "region": "ap-northeast-1",
+    "instanceId": "i-0987654321fedcba",
+    "secretId": "aurora/prod/credentials",
+    "localPort": 15434
+  }
+}

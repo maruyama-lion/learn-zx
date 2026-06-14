@@ -1,4 +1,4 @@
-import { $, argv, chalk } from 'zx';
+import { $, argv, chalk, question } from 'zx';
 import { createServer } from 'net';
 import { writeFileSync, existsSync, unlinkSync, readFileSync } from 'fs';
 import { resolve } from 'path';
@@ -6,6 +6,7 @@ import { resolve } from 'path';
 // ─── 型定義 ────────────────────────────────────────────────────────────────────
 
 interface Config {
+  env: string;
   profile: string;
   region: string;
   instanceId: string;
@@ -13,6 +14,16 @@ interface Config {
   localPort: number;
   pidFile: string;
 }
+
+interface EnvConfig {
+  profile?: string;
+  region?: string;
+  instanceId?: string;
+  secretId?: string;
+  localPort?: number;
+}
+
+type TunnelConfig = Record<string, EnvConfig>;
 
 interface Secret {
   host: string;
@@ -29,15 +40,36 @@ interface PidFile {
 
 // ─── 設定 ──────────────────────────────────────────────────────────────────────
 
-const CONFIG: Config = {
-  profile:    String(argv.profile        ?? process.env.AWS_PROFILE         ?? 'default'),
-  region:     String(argv.region         ?? process.env.AWS_REGION          ?? 'ap-northeast-1'),
-  instanceId: String(argv.instance       ?? process.env.BASTION_INSTANCE_ID ?? ''),
-  secretId:   String(argv.secret         ?? process.env.DB_SECRET_ID        ?? ''),
-  localPort:  Number(argv['local-port']  ?? process.env.LOCAL_PORT          ?? 15432),
-  pidFile:    resolve(process.env.HOME ?? '/tmp', '.db-tunnel.pid'),
-};
+function loadEnvConfig(env: string, configPath: string): EnvConfig {
+  if (!existsSync(configPath)) {
+    throw new Error(
+      `設定ファイルが見つかりません: ${configPath}\n` +
+      `  .db-tunnel.example.json をコピーして作成してください。`
+    );
+  }
+  const raw = JSON.parse(readFileSync(configPath, 'utf-8')) as TunnelConfig;
+  if (!raw[env]) {
+    const available = Object.keys(raw).join(', ');
+    throw new Error(`環境 "${env}" が設定ファイルに存在しません。利用可能: ${available}`);
+  }
+  return raw[env];
+}
 
+function buildConfig(env: string, envConfig: EnvConfig): Config {
+  const localPort = Number(argv['local-port'] ?? envConfig.localPort ?? 15432);
+  return {
+    env,
+    // インフラ情報は設定ファイルから取得。profile / region / localPort は実行時オーバーライド可
+    instanceId: String(envConfig.instanceId ?? ''),
+    secretId:   String(envConfig.secretId   ?? ''),
+    profile:    String(argv.profile ?? envConfig.profile ?? process.env.AWS_PROFILE ?? 'default'),
+    region:     String(argv.region  ?? envConfig.region  ?? process.env.AWS_REGION  ?? 'ap-northeast-1'),
+    localPort,
+    pidFile:    resolve(process.env.HOME ?? '/tmp', `.db-tunnel-${localPort}.pid`),
+  };
+}
+
+let CONFIG: Config;
 let SECRET: Secret | null = null;
 
 // ─── ロガー ────────────────────────────────────────────────────────────────────
@@ -202,11 +234,28 @@ function cleanPidFile(): void {
 async function main(): Promise<void> {
   console.log(chalk.bold('\n🔐 Aurora SSM トンネル起動スクリプト\n'));
 
+  const env = argv.env ? String(argv.env) : undefined;
+  if (!env) {
+    fail('--env が必要です。例: pnpm db-tunnel -- --env dev');
+    process.exit(1);
+  }
+
+  const configPath = String(argv.config ?? process.env.DB_TUNNEL_CONFIG ?? resolve(process.cwd(), '.db-tunnel.json'));
+  let envConfig: EnvConfig;
+  try {
+    envConfig = loadEnvConfig(env, configPath);
+  } catch (e) {
+    fail((e as Error).message);
+    process.exit(1);
+  }
+
+  CONFIG = buildConfig(env, envConfig);
+
   const missing: string[] = [];
-  if (!CONFIG.instanceId) missing.push('--instance (または BASTION_INSTANCE_ID)');
-  if (!CONFIG.secretId)   missing.push('--secret   (または DB_SECRET_ID)');
+  if (!CONFIG.instanceId) missing.push('instanceId (.db-tunnel.json の "${env}" に追加してください)');
+  if (!CONFIG.secretId)   missing.push('secretId   (.db-tunnel.json の "${env}" に追加してください)');
   if (missing.length) {
-    fail('必須パラメータが未設定です:\n  ' + missing.join('\n  '));
+    fail('必須フィールドが設定ファイルにありません:\n  ' + missing.join('\n  '));
     process.exit(1);
   }
 
@@ -215,13 +264,14 @@ async function main(): Promise<void> {
   await Promise.all([fetchSecret(), checkInstance()]);
 
   if (await isPortInUse(CONFIG.localPort)) {
-    fail(`ローカルポート ${CONFIG.localPort} は既に使用中です。--local-port で別のポートを指定してください。`);
+    fail(`ローカルポート ${CONFIG.localPort} は既に使用中です。.db-tunnel.json の localPort または --local-port で別のポートを指定してください。`);
     process.exit(1);
   }
 
   writePidFile();
 
   console.log(chalk.bold('\n📋 接続情報'));
+  console.log(`  Environment  : ${chalk.white(CONFIG.env)}`);
   console.log(`  AWS Profile  : ${chalk.white(CONFIG.profile)}`);
   console.log(`  Region       : ${chalk.white(CONFIG.region)}`);
   console.log(`  Secret ID    : ${chalk.white(CONFIG.secretId)}`);
@@ -236,6 +286,12 @@ async function main(): Promise<void> {
     `  PGPASSWORD='${SECRET!.password}' \\\n` +
     `  psql -h 127.0.0.1 -p ${CONFIG.localPort} -U ${SECRET!.username} -d ${SECRET!.dbname}\n`
   ));
+
+  const answer = await question(chalk.bold('続行しますか？ [y/N]: '));
+  if (answer.trim().toLowerCase() !== 'y') {
+    console.log('キャンセルしました。');
+    process.exit(0);
+  }
 
   log('SSM セッションを開始します...');
 
