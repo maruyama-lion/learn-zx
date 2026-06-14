@@ -1,0 +1,21 @@
+{
+  "type": "module",
+  "name": "learn-zx",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "lambda-update": "zx scripts/lambda-update.ts",
+    "load-arg": "zx scripts/load-arg.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "packageManager": "pnpm@10.32.1",
+  "dependencies": {
+    "zx": "^8.8.5"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.3"
+  }
+}
