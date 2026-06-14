@@ -1,16 +1,14 @@
 import { $, argv, question } from 'zx';
 
 async function lambdaUpdate() {
-/**
- * 1. 準備
- */
-	console.log('Lambda関数の更新を開始します...');
+  console.log('Lambda関数の更新を開始します...');
 
   const env = argv.env;
   const region = argv.region;
+  const stackName = argv.stackName ?? argv.stack;
 
-  if (!env || !region) {
-    console.error('引数がありません。 --env and --region arguments.');
+  if (!env || !region || !stackName) {
+    console.error('引数がありません。 --env, --region, --stackName を指定してください。');
     process.exit(1);
   }
 
@@ -26,31 +24,53 @@ async function lambdaUpdate() {
   }
 
   console.log(`Loading environment: ${env}, region: ${region}`);
-  // You can add your logic here to load the environment variables or configurations based on the provided arguments.
 
-/**
- * 2. CfnOutputから情報を取得
- */
-// TODO: CfnOutputから必要な情報を取得するロジックをここに追加します。
-console.log('CfnOutputから必要な情報を取得しています...');
+  console.log('CfnOutputから必要な情報を取得しています...');
 
-console.log('CfnOutputからの情報の取得が完了しました。');
+  const lambdaFunctionName = (
+    await $`aws cloudformation describe-stacks --stack-name ${stackName} --region ${region} --query "Stacks[0].Outputs[?OutputKey=='LambdaFuctionName'].OutputValue | [0]" --output text`
+  ).stdout.trim();
+  const ecrRepositoryName = (
+    await $`aws cloudformation describe-stacks --stack-name ${stackName} --region ${region} --query "Stacks[0].Outputs[?OutputKey=='ECRRepositoryName'].OutputValue | [0]" --output text`
+  ).stdout.trim();
 
-/**
- * 3. DockerイメージのビルドとECRへのプッシュ
- */
-// TODO: DockerイメージのビルドとECRへのプッシュを行うロジックをここに追加します。(ECRのリポジトリURLを使用する)
-console.log('DockerイメージのビルドとECRへのプッシュを開始します...');
+  if (!lambdaFunctionName || lambdaFunctionName === 'None') {
+    console.error('LambdaFuctionName を CloudFormation Outputs から取得できませんでした。');
+    process.exit(1);
+  }
 
-console.log('DockerイメージのビルドとECRへのプッシュが完了しました。');
+  if (!ecrRepositoryName || ecrRepositoryName === 'None') {
+    console.error('ECRRepositoryName を CloudFormation Outputs から取得できませんでした。');
+    process.exit(1);
+  }
 
-/**
- * 4. Lambda関数の更新
- */
-// TODO: update-function-code コマンドを実行してLambda関数を更新するロジックをここに追加します。(ECRのイメージを使用する)
-console.log('Lambda関数を更新しています...');
+  const gitCommitHash = (await $`git rev-parse --short HEAD`).stdout.trim();
+  const repositoryUri = (
+    await $`aws ecr describe-repositories --repository-names ${ecrRepositoryName} --region ${region} --query "repositories[0].repositoryUri" --output text`
+  ).stdout.trim();
+  const commitImageUri = `${repositoryUri}:${gitCommitHash}`;
+  const latestImageUri = `${repositoryUri}:latest`;
 
-console.log('Lambda関数の更新が完了しました。');
+  console.log(`Lambda function: ${lambdaFunctionName}`);
+  console.log(`ECR repository: ${ecrRepositoryName}`);
+  console.log(`Image URI: ${commitImageUri}`);
+
+  console.log('DockerイメージのビルドとECRへのプッシュを開始します...');
+
+  const registry = repositoryUri.split('/')[0];
+  await $`aws ecr get-login-password --region ${region} | docker login --username AWS --password-stdin ${registry}`;
+  await $`docker build -t ${commitImageUri} -t ${latestImageUri} .`;
+  await $`docker push ${commitImageUri}`;
+  await $`docker push ${latestImageUri}`;
+  await $`docker rmi ${commitImageUri} ${latestImageUri}`;
+
+  console.log('DockerイメージのビルドとECRへのプッシュが完了しました。');
+
+  console.log('Lambda関数を更新しています...');
+
+  await $`aws lambda update-function-code --function-name ${lambdaFunctionName} --image-uri ${commitImageUri} --region ${region}`;
+
+  console.log('Lambda関数の更新が完了しました。');
 }
 
 lambdaUpdate();
