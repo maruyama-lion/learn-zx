@@ -5,10 +5,9 @@ async function lambdaUpdate() {
 
   const env = argv.env;
   const region = argv.region;
-  const stackName = argv.stackName ?? argv.stack;
 
-  if (!env || !region || !stackName) {
-    console.error('引数がありません。 --env, --region, --stackName を指定してください。');
+  if (!env || !region) {
+    console.error('引数がありません。 --env, --region を指定してください。');
     process.exit(1);
   }
 
@@ -25,22 +24,29 @@ async function lambdaUpdate() {
 
   console.log(`Loading environment: ${env}, region: ${region}`);
 
-  console.log('CfnOutputから必要な情報を取得しています...');
+  console.log('CloudFormation Exportから必要な情報を取得しています...');
 
-  const lambdaFunctionName = (
-    await $`aws cloudformation describe-stacks --stack-name ${stackName} --region ${region} --query "Stacks[0].Outputs[?OutputKey=='LambdaFuctionName'].OutputValue | [0]" --output text`
-  ).stdout.trim();
-  const ecrRepositoryName = (
-    await $`aws cloudformation describe-stacks --stack-name ${stackName} --region ${region} --query "Stacks[0].Outputs[?OutputKey=='ECRRepositoryName'].OutputValue | [0]" --output text`
-  ).stdout.trim();
+  const exportsRaw = await $`aws cloudformation list-exports --region ${region} --output json`;
+  const exports = JSON.parse(exportsRaw.stdout) as {
+    Exports?: Array<{ Name?: string; Value?: string }>;
+  };
+  const exportMap = (exports.Exports ?? []).reduce<Record<string, string>>((acc, item) => {
+    if (item.Name && item.Value) {
+      acc[item.Name] = item.Value;
+    }
+    return acc;
+  }, {});
+
+  const lambdaFunctionName = exportMap['LambdaFunctionName']?.trim() ?? '';
+  const ecrRepositoryName = exportMap['ECRRepositoryName']?.trim() ?? '';
 
   if (!lambdaFunctionName || lambdaFunctionName === 'None') {
-    console.error('LambdaFuctionName を CloudFormation Outputs から取得できませんでした。');
+    console.error('LambdaFunctionName を CloudFormation Export から取得できませんでした。');
     process.exit(1);
   }
 
   if (!ecrRepositoryName || ecrRepositoryName === 'None') {
-    console.error('ECRRepositoryName を CloudFormation Outputs から取得できませんでした。');
+    console.error('ECRRepositoryName を CloudFormation Export から取得できませんでした。');
     process.exit(1);
   }
 
